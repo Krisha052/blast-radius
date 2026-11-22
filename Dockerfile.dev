@@ -8,5 +8,5 @@ RUN python -c "import urllib.request,tarfile,io; d=urllib.request.urlopen('https
  && chmod -R a+rX /opt/sqlglot
 COPY src/ /app/
 RUN python -m compileall -q /app && chmod -R a+rX /app
-ENV SKIP_INTEGRATION=0
+ENV SKIP_INTEGRATION=0 OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
 CMD ["python", "/app/selector.py"]

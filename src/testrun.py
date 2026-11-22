@@ -6,6 +6,7 @@ runtime selector so both see tests the same way.
 """
 
 import importlib
+import pickle
 import signal
 import sys
 import time
@@ -16,14 +17,22 @@ from concurrent.futures import Future
 class SyncExecutor:
     """Stands in for the optimizer tests' spawn pool: same results, no processes."""
 
-    def __init__(self, *a, **k):
-        pass
+    def __init__(self, max_workers=None, mp_context=None, initializer=None, initargs=(), **k):
+        if initializer is not None:
+            initializer(*pickle.loads(pickle.dumps(tuple(initargs))))
 
     def submit(self, fn, *args, **kwargs):
+        # Round-trip through pickle like the real spawn pool does: sqlglot
+        # pickles expressions through serde, which tests then depend on.
         fut = Future()
         try:
-            fut.set_result(fn(*args, **kwargs))
+            fn, args, kwargs = pickle.loads(pickle.dumps((fn, args, kwargs)))
+            fut.set_result(pickle.loads(pickle.dumps(fn(*args, **kwargs))))
         except BaseException as e:  # noqa: BLE001
+            try:
+                e = pickle.loads(pickle.dumps(e))
+            except BaseException:  # noqa: BLE001
+                pass
             fut.set_exception(e)
         return fut
 
@@ -68,7 +77,7 @@ def module_name(path):
     return path[:-3].replace("/", ".")
 
 
-def run(tests, on_class=None, on_test=None, timeout_for=None):
+def run(tests, on_class=None, on_test=None, timeout_for=None, setup_times=None, order_cost=None):
     """tests: list of (number, id). Returns (failed set, {number: seconds})."""
     by_file = {}
     for num, tid in tests:
@@ -97,6 +106,7 @@ def run(tests, on_class=None, on_test=None, timeout_for=None):
                     continue
                 if on_class:
                     on_class(f, cname)
+                ts = time.perf_counter()
                 try:
                     cls.setUpClass()
                 except BaseException:  # noqa: BLE001
@@ -106,6 +116,8 @@ def run(tests, on_class=None, on_test=None, timeout_for=None):
                     except BaseException:  # noqa: BLE001
                         pass
                     continue
+                if setup_times is not None:
+                    setup_times[f"{f}::{cname}"] = time.perf_counter() - ts
                 for num, meth in items:
                     if on_test:
                         on_test(num)

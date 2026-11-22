@@ -143,7 +143,10 @@ def py_candidates(path, old, new, fp, mp, tests_by_file, notes):
                 continue
             seen.add(where)
             def_line, body_start, end = where
-            out.append(mp.tests_for_lines(path, body_start, end))
+            if NARROW:
+                out.append(narrow_tests(path, old, fp, where, mp))
+            else:
+                out.append(mp.tests_for_lines(path, body_start, end))
             # A function that runs while modules import (metaclasses, table
             # builders) affects whoever uses the module, not just its coverers.
             if mp.runs_at_import(path, body_start, end):
@@ -161,6 +164,58 @@ def py_candidates(path, old, new, fp, mp, tests_by_file, notes):
     if module_hit:
         notes.append(f"module-level {path}")
         out.append(module_level(path, mp, tests_by_file))
+    return out
+
+
+NARROW = os.environ.get("BR_NARROW", "1") == "1"
+_stmts = {}
+
+
+def narrow_tests(path, old, fp, func, mp):
+    """Tests that ran the changed statements of one function (or, for an
+    insertion, the statements on either side of it). Falls back to the whole
+    function if nothing in it maps to a statement or a covered line."""
+    def_line, body_start, end = func
+    st = _stmts.get(path)
+    if st is None:
+        st = _stmts[path] = analyze.Stmts(old)
+    out = set()
+    found = False
+    for os_, ol, ns, nl, body, _ in fp.hunks:
+        line = os_ if ol else os_ + 1
+        prev = line - 1
+        pending = False
+        for tag, text in body:
+            if tag == " ":
+                if pending:
+                    for ln in (prev, line):
+                        if body_start <= ln <= end:
+                            sp = st.at(ln)
+                            if sp:
+                                out |= mp.tests_for_lines(path, *sp)
+                                found = True
+                    pending = False
+                prev = line
+                line += 1
+            elif tag == "-":
+                if body_start <= line <= end:
+                    sp = st.at(line)
+                    if sp:
+                        out |= mp.tests_for_lines(path, *sp)
+                        found = True
+                prev = line
+                line += 1
+            else:
+                pending = True
+        if pending:
+            for ln in (prev, line):
+                if body_start <= ln <= end:
+                    sp = st.at(ln)
+                    if sp:
+                        out |= mp.tests_for_lines(path, *sp)
+                        found = True
+    if not found or not out:
+        return mp.tests_for_lines(path, body_start, end)
     return out
 
 
@@ -200,6 +255,7 @@ def split(nums, secs, max_workers=8):
 
 
 CHEAP = float(os.environ.get("BR_CHEAP", "1.0"))  # run anything cheaper than this
+GIANTS_ALWAYS = os.environ.get("BR_GIANTS_ALWAYS", "1") == "1"
 RUN_MAX = float(os.environ.get("BR_RUN_MAX", "4.0"))  # sole coverers up to this get run
 
 
@@ -218,7 +274,9 @@ def resolve_expensive(exp, groups, cheap, failed, cost):
         hit = any(g & failed for g in mine)
         if sole:
             (run if cost[e] <= RUN_MAX else include).add(e)
-        elif hit:
+        elif hit or (GIANTS_ALWAYS and cost[e] > RUN_MAX):
+            # Giant tests exercise far more paths than the cheap tests that
+            # share a site with them, so a passing cheap test is weak evidence.
             include.add(e)
     return run, include
 

@@ -152,3 +152,30 @@ def cache_builders(text):
     names -= {"set", "get", "append", "items", "setdefault", "id", "isinstance", "issubclass", "deepcopy",
               "getattr", "dir", "lower", "super", "next", "len", "list", "dict", "tuple"}
     return names, spans
+
+
+class Stmts:
+    """Smallest enclosing statement span for a line (header-only for compound statements)."""
+
+    def __init__(self, text):
+        self.spans = []
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            return
+        for node in ast.walk(tree):
+            if isinstance(node, ast.stmt) and not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                end = node.end_lineno
+                for field in ("body", "orelse", "finalbody", "handlers"):
+                    sub = getattr(node, field, None)
+                    if sub:
+                        end = min(end, sub[0].lineno - 1)
+                        break
+                self.spans.append((node.lineno, max(node.lineno, end)))
+        self.spans.sort(key=lambda s: s[1] - s[0])
+
+    def at(self, line):
+        for a, b in self.spans:
+            if a <= line <= b:
+                return (a, b)
+        return None

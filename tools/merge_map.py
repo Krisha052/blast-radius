@@ -37,6 +37,8 @@ for path in sorted(glob.glob(sys.argv[2] + "/*.json")):
         fl = lines.setdefault(f, {})
         for ln, ctxs in d.items():
             s = fl.setdefault(int(ln), set())
+            if "import" in ctxs:
+                imports.setdefault(f, set()).add(int(ln))
             for c in ctxs:
                 s.update(expand(c))
     for ctx, paths in m["reads"].items():
@@ -73,6 +75,7 @@ out = {
     "lines": out_lines,
     "filecov": filecov,
     "reads": {p: sid(s) for p, s in sorted(reads.items()) if s},
+    "imp": {f: sorted(v) for f, v in sorted(imports.items())},
 }
 with gzip.open(sys.argv[3], "wt", compresslevel=9) as f:
     json.dump(out, f, separators=(",", ":"))

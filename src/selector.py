@@ -43,6 +43,11 @@ class Map:
         self.lines = {f: {int(k): v for k, v in d.items()} for f, d in m["lines"].items()}
         self.reads = m["reads"]
         self.filecov = m["filecov"]
+        self.imp = {f: set(v) for f, v in m.get("imp", {}).items()}
+
+    def runs_at_import(self, f, lo, hi):
+        lines = self.imp.get(f)
+        return bool(lines) and any(ln in lines for ln in range(lo, hi + 1))
 
     def tests_for_lines(self, f, lo, hi):
         d = self.lines.get(f)
@@ -120,7 +125,7 @@ def py_candidates(path, old, new, fp, mp, tests_by_file, notes):
         ko = analyze.token_key(old)
         if ko is not None and ko == analyze.token_key(new):
             notes.append(f"comment-only {path}")
-            return []
+            return [mp.read_tests(path)]
     if old is None:
         notes.append(f"new file {path}")
         return []
@@ -137,6 +142,11 @@ def py_candidates(path, old, new, fp, mp, tests_by_file, notes):
             seen.add(where)
             def_line, body_start, end = where
             out.append(mp.tests_for_lines(path, body_start, end))
+            # A function that runs while modules import (metaclasses, table
+            # builders) affects whoever uses the module, not just its coverers.
+            if mp.runs_at_import(path, body_start, end):
+                notes.append(f"import-time func {path}:{def_line}")
+                module_hit = True
         elif kind == "module":
             module_hit = True
     if module_hit:
@@ -197,9 +207,11 @@ def resolve_expensive(exp, groups, cheap, failed, cost):
         mine = [g for g in groups if e in g]
         sole = any(not (g & cheap) for g in mine)
         hit = any(g & failed for g in mine)
-        if sole:
-            (run if cost[e] <= RUN_MAX else include).add(e)
-        elif hit:
+        if hit:
+            include.add(e)
+        elif cost[e] <= RUN_MAX:
+            run.add(e)
+        elif sole:
             include.add(e)
     return run, include
 

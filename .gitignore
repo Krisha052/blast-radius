@@ -1,0 +1,4 @@
+sqlglot-src/
+output.jsonl
+__pycache__/
+work/

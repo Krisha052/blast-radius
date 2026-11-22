@@ -108,3 +108,47 @@ def _insert_sites(funcs, before, after, texts):
             return [("func", f)]
     kind = "module" if code else "module_soft"
     return [(kind, after)]
+
+
+def cache_builders(text):
+    """Names of functions called inside cache-miss blocks (`if x is None:` /
+    `if k not in cache:` whose body stores into a subscript or attribute), and
+    the line spans of those blocks. Such code runs once per process, so its
+    coverage names only whichever test happened to fill the cache."""
+    names, spans = set(), []
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return names, spans
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        t = node.test
+        miss = (isinstance(t, ast.Compare) and len(t.ops) == 1 and isinstance(t.ops[0], (ast.Is, ast.NotIn))
+                and (not isinstance(t.ops[0], ast.Is) or (isinstance(t.comparators[0], ast.Constant) and t.comparators[0].value is None)))
+        if not miss:
+            continue
+        def process_level(tg):
+            # global_cache[key] = ... or cls.attr = ...; not per-instance self.x
+            if isinstance(tg, ast.Subscript) and isinstance(tg.value, ast.Name):
+                return tg.value.id not in ("self",)
+            if isinstance(tg, ast.Attribute) and isinstance(tg.value, ast.Name):
+                return tg.value.id == "cls"
+            return False
+
+        stores = any(process_level(tg)
+                     for st in node.body for sub in ast.walk(st) if isinstance(sub, ast.Assign) for tg in sub.targets)
+        if not stores:
+            continue
+        spans.append((node.lineno, node.end_lineno))
+        for st in node.body:
+            for sub in ast.walk(st):
+                if isinstance(sub, ast.Call):
+                    f = sub.func
+                    if isinstance(f, ast.Name):
+                        names.add(f.id)
+                    elif isinstance(f, ast.Attribute):
+                        names.add(f.attr)
+    names -= {"set", "get", "append", "items", "setdefault", "id", "isinstance", "issubclass", "deepcopy",
+              "getattr", "dir", "lower", "super", "next", "len", "list", "dict", "tuple"}
+    return names, spans

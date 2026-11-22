@@ -135,6 +135,8 @@ def py_candidates(path, old, new, fp, mp, tests_by_file, notes):
     out = []
     seen = set()
     module_hit = False
+    builders, miss_spans = analyze.cache_builders(old)
+    fnames = {sp[2]: sp[4] for sp in analyze.Funcs(old).spans}  # def line -> name
     for kind, where in analyze.change_sites(old, fp):
         if kind == "func":
             if where in seen:
@@ -147,7 +149,14 @@ def py_candidates(path, old, new, fp, mp, tests_by_file, notes):
             if mp.runs_at_import(path, body_start, end):
                 notes.append(f"import-time func {path}:{def_line}")
                 module_hit = True
+            if fnames.get(def_line) in builders:
+                notes.append(f"cache builder {fnames.get(def_line)}")
+                module_hit = True
         elif kind == "module":
+            module_hit = True
+    for os_, ol, ns, nl, body, _ in fp.hunks:
+        if any(a <= os_ + ol and os_ <= b for a, b in miss_spans):
+            notes.append(f"cache-miss block {path}:{os_}")
             module_hit = True
     if module_hit:
         notes.append(f"module-level {path}")
@@ -207,11 +216,9 @@ def resolve_expensive(exp, groups, cheap, failed, cost):
         mine = [g for g in groups if e in g]
         sole = any(not (g & cheap) for g in mine)
         hit = any(g & failed for g in mine)
-        if hit:
-            include.add(e)
-        elif cost[e] <= RUN_MAX:
-            run.add(e)
-        elif sole:
+        if sole:
+            (run if cost[e] <= RUN_MAX else include).add(e)
+        elif hit:
             include.add(e)
     return run, include
 
